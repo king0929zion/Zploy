@@ -44,6 +44,7 @@
     <string name="open_overlay_editor">Open in-game editor</string>
     <string name="overlay_hint">Choose a mapping type, press the controller input, then drag the marker over the game control.</string>
     <string name="add_mapping">Add mapping</string>
+    <string name="choose_mapping_type">Choose mapping type</string>
     <string name="press_controller_button">Press the controller button to map</string>
     <string name="choose_stick">Choose a stick</string>
     <string name="tap">Tap</string>
