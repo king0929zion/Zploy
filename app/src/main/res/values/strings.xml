@@ -44,6 +44,7 @@
     <string name="open_overlay_editor">打开游戏内编辑</string>
     <string name="overlay_hint">先选择映射类型，再按对应手柄按键，最后把标记拖到游戏按钮位置。</string>
     <string name="add_mapping">添加映射</string>
+    <string name="choose_mapping_type">选择映射类型</string>
     <string name="press_controller_button">现在按下要映射的手柄按键</string>
     <string name="choose_stick">选择要使用的摇杆</string>
     <string name="tap">点击</string>
