@@ -1,10 +1,10 @@
 package com.zploy.app;
 
 import android.content.Context;
+import android.graphics.Rect;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.SystemClock;
-import android.graphics.Rect;
 import android.view.WindowManager;
 
 import java.util.HashMap;
@@ -14,16 +14,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * 60 Hz mapping loop. Shizuku raw touch injection is preferred. The accessibility
- * service is used for global controller capture and overlay hosting.
- */
+/** 60 Hz game-scoped mapping loop. Shizuku is preferred for raw multi-touch injection. */
 public final class MappingEngine {
     private final Context context;
     private final MappingStore store;
     private final TouchSynthesizer touch = new TouchSynthesizer();
     private final HandlerThread thread = new HandlerThread("ZployMapping");
-    private Handler handler;
+    private final Handler handler;
     private volatile boolean running;
     private Set<Integer> previousKeys = new HashSet<>();
     private final Map<String, Long> tapUntil = new HashMap<>();
@@ -37,25 +34,16 @@ public final class MappingEngine {
         handler = new Handler(thread.getLooper());
     }
 
-    public void start() {
-        if (running) return;
-        running = true;
-        handler.post(loop);
-    }
+    public void start() { if (!running) { running = true; handler.post(loop); } }
+    public void stop() { running = false; handler.removeCallbacksAndMessages(null); reset(); }
+    public void destroy() { stop(); thread.quitSafely(); }
 
-    public void stop() {
-        running = false;
-        handler.removeCallbacksAndMessages(null);
+    private void reset() {
         touch.cancelAll();
         previousKeys = new HashSet<>();
         tapUntil.clear();
         cameraPositions.clear();
         cameraReset.clear();
-    }
-
-    public void destroy() {
-        stop();
-        thread.quitSafely();
     }
 
     private final Runnable loop = new Runnable() {
@@ -67,31 +55,26 @@ public final class MappingEngine {
     };
 
     private void tick() {
+        ZployAccessibilityService accessibility = ZployAccessibilityService.getInstance();
+        if (accessibility == null || !accessibility.isTargetGameForeground() || accessibility.isOverlayEditing()) {
+            reset();
+            return;
+        }
+
         String backend = Prefs.backend(context);
         boolean shizukuAllowed = !Prefs.BACKEND_ACCESSIBILITY.equals(backend);
         if (!shizukuAllowed || !ShizukuBridge.get().isReady()) {
-            // Compatibility mode is handled event-by-event by the accessibility service.
             touch.cancelAll();
             return;
         }
 
         ControllerState state = ControllerStore.get().snapshot();
-        ZployAccessibilityService accessibility = ZployAccessibilityService.getInstance();
-        if (accessibility != null && accessibility.isOverlayEditing()) {
-            touch.cancelAll();
-            previousKeys = effectivePressedKeys(state);
-            tapUntil.clear();
-            cameraPositions.clear();
-            cameraReset.clear();
-            return;
-        }
         List<MappingItem> mappings = store.load();
         long now = SystemClock.uptimeMillis();
         WindowManager wm = context.getSystemService(WindowManager.class);
         if (wm == null) return;
         Rect bounds = wm.getCurrentWindowMetrics().getBounds();
-        int width = bounds.width();
-        int height = bounds.height();
+        int width = bounds.width(), height = bounds.height();
         float shortSide = Math.min(width, height);
 
         Map<String, TouchPoint> desired = new LinkedHashMap<>();
@@ -100,39 +83,32 @@ public final class MappingEngine {
         for (MappingItem item : mappings) {
             switch (item.type) {
                 case JOYSTICK:
-                    if (item.keyCode == MappingItem.KEY_LEFT_STICK) {
-                        float lx = MappingMath.applyDeadZone(state.lx, item.deadZone);
-                        float ly = MappingMath.applyDeadZone(state.ly, item.deadZone);
-                        float mag = MappingMath.magnitude(lx, ly);
+                    if (item.keyCode == MappingItem.KEY_LEFT_STICK || item.keyCode == MappingItem.KEY_RIGHT_STICK) {
+                        float sx = item.keyCode == MappingItem.KEY_LEFT_STICK ? state.lx : state.rx;
+                        float sy = item.keyCode == MappingItem.KEY_LEFT_STICK ? state.ly : state.ry;
+                        float x = MappingMath.applyDeadZone(sx, item.deadZone);
+                        float y = MappingMath.applyDeadZone(sy, item.deadZone);
+                        float mag = MappingMath.magnitude(x, y);
                         if (mag > 0.001f) {
-                            if (mag > 1f) { lx /= mag; ly /= mag; }
-                            float cx = item.x * width;
-                            float cy = item.y * height;
+                            if (mag > 1f) { x /= mag; y /= mag; }
+                            float cx = item.x * width, cy = item.y * height;
                             float r = item.radius * shortSide * item.sensitivity;
-                            desired.put(item.id, new TouchPoint(cx + lx * r, cy + ly * r));
+                            desired.put(item.id, new TouchPoint(cx + x * r, cy + y * r));
                         }
                     }
                     break;
                 case CAMERA:
-                    if (item.keyCode == MappingItem.KEY_RIGHT_STICK) {
+                    if (item.keyCode == MappingItem.KEY_RIGHT_STICK || item.keyCode == MappingItem.KEY_LEFT_STICK)
                         handleCamera(item, state, width, height, desired);
-                    }
                     break;
                 case TAP:
-                    if (state.pressed(item.keyCode) && !previousKeys.contains(item.keyCode)) {
-                        tapUntil.put(item.id, now + 55L);
-                    }
+                    if (state.pressed(item.keyCode) && !previousKeys.contains(item.keyCode)) tapUntil.put(item.id, now + 55L);
                     Long expiry = tapUntil.get(item.id);
-                    if (expiry != null && now < expiry) {
-                        desired.put(item.id, new TouchPoint(item.x * width, item.y * height));
-                    } else if (expiry != null) {
-                        tapUntil.remove(item.id);
-                    }
+                    if (expiry != null && now < expiry) desired.put(item.id, new TouchPoint(item.x * width, item.y * height));
+                    else if (expiry != null) tapUntil.remove(item.id);
                     break;
                 case HOLD:
-                    if (state.pressed(item.keyCode)) {
-                        desired.put(item.id, new TouchPoint(item.x * width, item.y * height));
-                    }
+                    if (state.pressed(item.keyCode)) desired.put(item.id, new TouchPoint(item.x * width, item.y * height));
                     break;
             }
         }
@@ -152,36 +128,20 @@ public final class MappingEngine {
         return keys;
     }
 
-    private void handleCamera(MappingItem item, ControllerState state, int width, int height,
-                              Map<String, TouchPoint> desired) {
-        float rx = MappingMath.cameraCurve(state.rx, item.deadZone, 1.45f);
-        float ry = MappingMath.cameraCurve(state.ry, item.deadZone, 1.45f);
+    private void handleCamera(MappingItem item, ControllerState state, int width, int height, Map<String, TouchPoint> desired) {
+        boolean left = item.keyCode == MappingItem.KEY_LEFT_STICK;
+        float rx = MappingMath.cameraCurve(left ? state.lx : state.rx, item.deadZone, 1.45f);
+        float ry = MappingMath.cameraCurve(left ? state.ly : state.ry, item.deadZone, 1.45f);
         if (Math.abs(rx) < 0.001f && Math.abs(ry) < 0.001f) {
-            cameraPositions.remove(item.id);
-            cameraReset.remove(item.id);
-            return;
+            cameraPositions.remove(item.id); cameraReset.remove(item.id); return;
         }
-
-        if (cameraReset.remove(item.id)) {
-            // One frame without this pointer gives the game a clean UP before restarting.
-            cameraPositions.remove(item.id);
-            return;
-        }
-
+        if (cameraReset.remove(item.id)) { cameraPositions.remove(item.id); return; }
         TouchPoint p = cameraPositions.get(item.id);
         if (p == null) p = new TouchPoint(item.x * width, item.y * height);
-
         float baseSpeed = Math.min(width, height) * 0.012f * item.sensitivity;
-        float nx = p.x + rx * baseSpeed;
-        float ny = p.y + ry * baseSpeed;
-        float minX = width * 0.12f, maxX = width * 0.88f;
-        float minY = height * 0.12f, maxY = height * 0.88f;
-
-        if (nx < minX || nx > maxX || ny < minY || ny > maxY) {
-            cameraReset.add(item.id);
-            return;
-        }
-
+        float nx = p.x + rx * baseSpeed, ny = p.y + ry * baseSpeed;
+        float minX = width * 0.12f, maxX = width * 0.88f, minY = height * 0.12f, maxY = height * 0.88f;
+        if (nx < minX || nx > maxX || ny < minY || ny > maxY) { cameraReset.add(item.id); return; }
         TouchPoint next = new TouchPoint(nx, ny);
         cameraPositions.put(item.id, next);
         desired.put(item.id, next);
