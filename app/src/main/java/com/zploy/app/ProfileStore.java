@@ -10,12 +10,22 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-/** Small local profile registry. Profiles keep separate mapping sets. */
+/** Local game/profile registry. Every profile can be bound to one package. */
 public final class ProfileStore {
     public static final class Profile {
         public final String id;
         public String name;
-        Profile(String id, String name) { this.id = id; this.name = name; }
+        public String packageName;
+        public String appLabel;
+
+        Profile(String id, String name, String packageName, String appLabel) {
+            this.id = id;
+            this.name = name;
+            this.packageName = packageName == null ? "" : packageName;
+            this.appLabel = appLabel == null ? "" : appLabel;
+        }
+
+        public boolean isBound() { return !packageName.isEmpty(); }
     }
 
     private static final String PREF = "zploy_profiles";
@@ -38,6 +48,8 @@ public final class ProfileStore {
             JSONObject o = new JSONObject();
             o.put("id", DEFAULT_ID);
             o.put("name", context.getString(R.string.default_profile));
+            o.put("packageName", "");
+            o.put("appLabel", "");
             arr.put(o);
         } catch (Exception ignored) {}
         prefs.edit().putString(KEY_LIST, arr.toString()).putString(KEY_ACTIVE, DEFAULT_ID).apply();
@@ -50,11 +62,16 @@ public final class ProfileStore {
             JSONArray arr = new JSONArray(prefs.getString(KEY_LIST, "[]"));
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject o = arr.getJSONObject(i);
-                out.add(new Profile(o.getString("id"), o.optString("name", "Profile")));
+                out.add(new Profile(
+                        o.getString("id"),
+                        o.optString("name", "Profile"),
+                        o.optString("packageName", ""),
+                        o.optString("appLabel", "")
+                ));
             }
         } catch (Exception ignored) {}
         if (out.isEmpty()) {
-            out.add(new Profile(DEFAULT_ID, context.getString(R.string.default_profile)));
+            out.add(new Profile(DEFAULT_ID, context.getString(R.string.default_profile), "", ""));
             save(out);
         }
         return out;
@@ -67,6 +84,8 @@ public final class ProfileStore {
                 JSONObject o = new JSONObject();
                 o.put("id", p.id);
                 o.put("name", p.name);
+                o.put("packageName", p.packageName);
+                o.put("appLabel", p.appLabel);
                 arr.put(o);
             }
             prefs.edit().putString(KEY_LIST, arr.toString()).apply();
@@ -82,11 +101,15 @@ public final class ProfileStore {
         return active;
     }
 
-    public synchronized String activeName() {
+    public synchronized Profile active() {
         String id = activeId();
-        for (Profile p : load()) if (p.id.equals(id)) return p.name;
-        return context.getString(R.string.default_profile);
+        for (Profile p : load()) if (p.id.equals(id)) return p;
+        return load().get(0);
     }
+
+    public synchronized String activeName() { return active().name; }
+    public synchronized String activePackage() { return active().packageName; }
+    public synchronized String activeAppLabel() { return active().appLabel; }
 
     public synchronized void setActive(String id) {
         for (Profile p : load()) {
@@ -98,14 +121,48 @@ public final class ProfileStore {
     }
 
     public synchronized Profile create(String name) {
+        return create(name, "", "");
+    }
+
+    public synchronized Profile createForGame(String packageName, String appLabel) {
+        String label = appLabel == null || appLabel.trim().isEmpty() ? packageName : appLabel.trim();
+        for (Profile p : load()) {
+            if (!packageName.isEmpty() && packageName.equals(p.packageName)) {
+                setActive(p.id);
+                return p;
+            }
+        }
+        return create(label, packageName, label);
+    }
+
+    private synchronized Profile create(String name, String packageName, String appLabel) {
         List<Profile> profiles = load();
         String clean = name == null ? "" : name.trim();
         if (clean.isEmpty()) clean = "Profile " + (profiles.size() + 1);
-        Profile created = new Profile(UUID.randomUUID().toString(), clean);
+        Profile created = new Profile(UUID.randomUUID().toString(), clean, packageName, appLabel);
         profiles.add(created);
         save(profiles);
         setActive(created.id);
         return created;
+    }
+
+    public synchronized void bindGame(String id, String packageName, String appLabel) {
+        List<Profile> profiles = load();
+        for (Profile p : profiles) {
+            if (p.id.equals(id)) {
+                p.packageName = packageName == null ? "" : packageName;
+                p.appLabel = appLabel == null ? "" : appLabel;
+                if ((p.name == null || p.name.trim().isEmpty() || p.name.equals(context.getString(R.string.default_profile)))
+                        && !p.appLabel.isEmpty()) p.name = p.appLabel;
+            }
+        }
+        save(profiles);
+    }
+
+    public synchronized Profile findByPackage(String packageName) {
+        if (packageName == null || packageName.isEmpty()) return null;
+        for (Profile p : load()) if (packageName.equals(p.packageName)) return p;
+        return null;
     }
 
     public synchronized void rename(String id, String name) {
