@@ -32,21 +32,20 @@ public final class MappingStore {
         if (cached != null) return new ArrayList<>(cached);
         String raw = prefs.getString(key(profileId), null);
         if (raw == null) {
-            List<MappingItem> d = defaults();
-            cache.put(profileId, d);
-            return new ArrayList<>(d);
+            List<MappingItem> empty = new ArrayList<>();
+            cache.put(profileId, empty);
+            return new ArrayList<>(empty);
         }
         try {
             JSONArray arr = new JSONArray(raw);
             List<MappingItem> out = new ArrayList<>();
             for (int i = 0; i < arr.length(); i++) out.add(MappingItem.fromJson(arr.getJSONObject(i)));
-            if (out.isEmpty()) out = defaults();
             cache.put(profileId, out);
             return new ArrayList<>(out);
         } catch (Exception e) {
-            List<MappingItem> d = defaults();
-            cache.put(profileId, d);
-            return new ArrayList<>(d);
+            List<MappingItem> empty = new ArrayList<>();
+            cache.put(profileId, empty);
+            return new ArrayList<>(empty);
         }
     }
 
@@ -92,27 +91,16 @@ public final class MappingStore {
         }
     }
 
-    public static MappingItem newButton(int keyCode) {
+    public static MappingItem newButton(int keyCode, MappingType type) {
         return new MappingItem(UUID.randomUUID().toString(), keyCode, labelForKey(keyCode),
-                MappingType.TAP, 0.5f, 0.5f, 0.055f, 0.1f, 1f);
+                type, 0.5f, 0.5f, 0.055f, 0.1f, 1f);
     }
 
-    private List<MappingItem> defaults() {
-        List<MappingItem> list = new ArrayList<>();
-        list.add(new MappingItem("left-stick", MappingItem.KEY_LEFT_STICK, "LS", MappingType.JOYSTICK,
-                0.18f, 0.76f, 0.085f, 0.12f, 1f));
-        list.add(new MappingItem("right-stick", MappingItem.KEY_RIGHT_STICK, "RS", MappingType.CAMERA,
-                0.70f, 0.50f, 0.07f, 0.10f, 1f));
-        list.add(new MappingItem("a", KeyEvent.KEYCODE_BUTTON_A, "A", MappingType.TAP,
-                0.84f, 0.76f, 0.05f, 0.1f, 1f));
-        list.add(new MappingItem("b", KeyEvent.KEYCODE_BUTTON_B, "B", MappingType.TAP,
-                0.91f, 0.69f, 0.05f, 0.1f, 1f));
-        list.add(new MappingItem("x", KeyEvent.KEYCODE_BUTTON_X, "X", MappingType.HOLD,
-                0.78f, 0.69f, 0.05f, 0.1f, 1f));
-        list.add(new MappingItem("y", KeyEvent.KEYCODE_BUTTON_Y, "Y", MappingType.TAP,
-                0.85f, 0.61f, 0.05f, 0.1f, 1f));
-        list.add(new MappingItem("rb", KeyEvent.KEYCODE_BUTTON_R1, "RB", MappingType.TAP,
-                0.90f, 0.38f, 0.05f, 0.1f, 1f));
-        return list;
+    public static MappingItem newAnalog(int keyCode, MappingType type) {
+        String label = keyCode == MappingItem.KEY_LEFT_STICK ? "LS" : "RS";
+        float radius = type == MappingType.JOYSTICK ? 0.085f : 0.07f;
+        float deadZone = keyCode == MappingItem.KEY_LEFT_STICK ? 0.12f : 0.10f;
+        return new MappingItem(UUID.randomUUID().toString(), keyCode, label,
+                type, 0.5f, 0.5f, radius, deadZone, 1f);
     }
 }

@@ -9,8 +9,6 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.accessibility.AccessibilityEvent;
 
-import java.util.List;
-
 public final class ZployAccessibilityService extends AccessibilityService {
     private static volatile ZployAccessibilityService instance;
     public static ZployAccessibilityService getInstance() { return instance; }
@@ -18,9 +16,9 @@ public final class ZployAccessibilityService extends AccessibilityService {
     private MappingEngine engine;
     private OverlayController overlay;
     private MappingStore store;
+    private volatile String foregroundPackage = "";
 
-    @Override
-    protected void onServiceConnected() {
+    @Override protected void onServiceConnected() {
         super.onServiceConnected();
         instance = this;
         ShizukuBridge.get().init(this);
@@ -30,16 +28,18 @@ public final class ZployAccessibilityService extends AccessibilityService {
         applyMappingState(Prefs.mappingEnabled(this));
     }
 
-    @Override
-    public void onAccessibilityEvent(AccessibilityEvent event) {
+    @Override public void onAccessibilityEvent(AccessibilityEvent event) {
+        if (event == null || event.getPackageName() == null) return;
+        String pkg = event.getPackageName().toString();
+        if (pkg.isEmpty() || pkg.equals(foregroundPackage)) return;
+        foregroundPackage = pkg;
+        if (overlay != null) overlay.onForegroundPackageChanged(pkg);
+        setJoystickCapture(Prefs.mappingEnabled(this) && isTargetGameForeground());
     }
 
-    @Override
-    public void onInterrupt() {
-    }
+    @Override public void onInterrupt() {}
 
-    @Override
-    protected boolean onKeyEvent(KeyEvent event) {
+    @Override protected boolean onKeyEvent(KeyEvent event) {
         if (!ControllerStore.isControllerSource(event.getSource())) return false;
         ControllerStore.get().updateKey(event);
 
@@ -48,29 +48,23 @@ public final class ZployAccessibilityService extends AccessibilityService {
             return true;
         }
 
-        if (!Prefs.mappingEnabled(this)) return false;
+        if (!Prefs.mappingEnabled(this) || !isTargetGameForeground()) return false;
         MappingItem item = store == null ? null : store.findByKey(event.getKeyCode());
         if (item == null) return false;
 
         String backend = Prefs.backend(this);
         if (Prefs.BACKEND_ACCESSIBILITY.equals(backend) || !ShizukuBridge.get().isReady()) {
-            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
-                accessibilityCompat(item);
-            }
+            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) accessibilityCompat(item);
         }
         return true;
     }
 
-    @Override
-    public void onMotionEvent(MotionEvent event) {
+    @Override public void onMotionEvent(MotionEvent event) {
         if (!ControllerStore.isControllerSource(event.getSource())) return;
         ControllerState before = ControllerStore.get().snapshot();
         ControllerStore.get().updateMotion(event);
         ControllerState after = ControllerStore.get().snapshot();
 
-        // GameSir modes can expose LT/RT and the D-pad only as axes. In edit
-        // mode, convert their rising edge into the same mapping-add flow used
-        // by normal KeyEvents.
         if (overlay != null && overlay.isEditing()) {
             int[] axisButtons = {
                     KeyEvent.KEYCODE_BUTTON_L2, KeyEvent.KEYCODE_BUTTON_R2,
@@ -88,7 +82,6 @@ public final class ZployAccessibilityService extends AccessibilityService {
 
     public void applyMappingState(boolean enabled) {
         Prefs.setMappingEnabled(this, enabled);
-        setJoystickCapture(enabled);
         if (enabled) {
             if (engine != null) engine.start();
             if (overlay != null) overlay.setEnabled(true);
@@ -96,19 +89,14 @@ public final class ZployAccessibilityService extends AccessibilityService {
             if (engine != null) engine.stop();
             if (overlay != null) overlay.setEnabled(false);
         }
+        setJoystickCapture(enabled && isTargetGameForeground());
     }
 
-    public void openEditor() {
-        if (overlay != null) overlay.openEditor();
-    }
-
-    public void refreshOverlay() {
-        if (overlay != null) overlay.refresh();
-    }
-
-    public boolean isOverlayEditing() {
-        return overlay != null && overlay.isEditing();
-    }
+    public void openEditor() { if (overlay != null) overlay.openEditor(); }
+    public void refreshOverlay() { if (overlay != null) overlay.refresh(); }
+    public boolean isOverlayEditing() { return overlay != null && overlay.isEditing(); }
+    public boolean isTargetGameForeground() { return overlay != null && overlay.isTargetGameForeground(); }
+    public String foregroundPackage() { return foregroundPackage; }
 
     private void setJoystickCapture(boolean capture) {
         try {
@@ -117,8 +105,7 @@ public final class ZployAccessibilityService extends AccessibilityService {
             info.flags |= AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS;
             info.setMotionEventSources(capture ? InputDevice.SOURCE_JOYSTICK : 0);
             setServiceInfo(info);
-        } catch (Throwable ignored) {
-        }
+        } catch (Throwable ignored) {}
     }
 
     private void accessibilityCompat(MappingItem item) {
@@ -132,8 +119,7 @@ public final class ZployAccessibilityService extends AccessibilityService {
         dispatchGesture(new GestureDescription.Builder().addStroke(stroke).build(), null, null);
     }
 
-    @Override
-    public void onDestroy() {
+    @Override public void onDestroy() {
         if (engine != null) engine.destroy();
         if (overlay != null) overlay.destroy();
         instance = null;
